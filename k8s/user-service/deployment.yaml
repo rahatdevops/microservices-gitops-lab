@@ -1,3 +1,4 @@
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -35,6 +36,10 @@ spec:
               drop:
                 - ALL
 
+          volumeMounts:
+            - name: tmp-volume
+              mountPath: /tmp
+
           command:
             - python
             - -c
@@ -70,6 +75,10 @@ spec:
               drop:
                 - ALL
 
+          volumeMounts:
+            - name: tmp-volume
+              mountPath: /tmp
+
           env:
             - name: DB_HOST
               value: postgres
@@ -99,3 +108,9 @@ spec:
               port: 5000
             initialDelaySeconds: 15
             periodSeconds: 20
+
+      volumes:
+        - name: tmp-volume
+          emptyDir:
+            sizeLimit: 100Mi
+
