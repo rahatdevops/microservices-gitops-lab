@@ -44,7 +44,7 @@ spec:
 
       containers:
         - name: user-service
-          image: YOUR_DOCKERHUB_USERNAME/user-service:initial
+          image: rahat6/user-service:initial
 
           ports:
             - containerPort: 5000

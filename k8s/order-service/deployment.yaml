@@ -44,7 +44,7 @@ spec:
 
       containers:
         - name: order-service
-          image: YOUR_DOCKERHUB_USERNAME/order-service:initial
+          image: rahat6/order-service:initial
 
           ports:
             - containerPort: 5000
