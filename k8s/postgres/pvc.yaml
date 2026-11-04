@@ -4,6 +4,7 @@ metadata:
   name: postgres-pvc
   namespace: microservices
 spec:
+  storageClassName: nfs-client
   accessModes:
     - ReadWriteOnce
   resources:
