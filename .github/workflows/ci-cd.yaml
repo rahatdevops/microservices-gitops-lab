@@ -1,6 +1,5 @@
 name: Microservices CI/CD Pipeline
 
-
 on:
   push:
     branches:
