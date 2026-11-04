@@ -1,0 +1,153 @@
+name: Microservices CI-CD
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'services/**'
+      - '.github/workflows/ci-cd.yaml'
+
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'services/**'
+      - '.github/workflows/ci-cd.yaml'
+
+permissions:
+  contents: write
+
+jobs:
+
+  ci-cd:
+
+    runs-on: ubuntu-24.04
+
+    steps:
+
+      # 1. Checkout source code
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 2. Setup Python
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # 3. Test User Service
+      - name: Test User Service
+        working-directory: services/user-service
+        run: |
+          pip install -r requirements.txt
+          pytest -v
+
+      # 4. Test Order Service
+      - name: Test Order Service
+        working-directory: services/order-service
+        run: |
+          pip install -r requirements.txt
+          pytest -v
+
+      # 5. Scan source code and Kubernetes configuration
+      - name: Trivy Filesystem Scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig,secret
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+      # 6. Build User Service Image
+      - name: Build User Image
+        run: |
+          docker build \
+            -t ${{ secrets.DOCKERHUB_USERNAME }}/user-service:${{ github.sha }} \
+            ./services/user-service
+
+      # 7. Build Order Service Image
+      - name: Build Order Image
+        run: |
+          docker build \
+            -t ${{ secrets.DOCKERHUB_USERNAME }}/order-service:${{ github.sha }} \
+            ./services/order-service
+
+      # 8. Scan User Image
+      - name: Trivy User Image Scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: '${{ secrets.DOCKERHUB_USERNAME }}/user-service:${{ github.sha }}'
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+
+      # 9. Scan Order Image
+      - name: Trivy Order Image Scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: '${{ secrets.DOCKERHUB_USERNAME }}/order-service:${{ github.sha }}'
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+
+      # 10. Login to Docker Hub
+      - name: Docker Hub Login
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # 11. Push User Image
+      - name: Push User Image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          docker push \
+            ${{ secrets.DOCKERHUB_USERNAME }}/user-service:${{ github.sha }}
+
+      # 12. Push Order Image
+      - name: Push Order Image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          docker push \
+            ${{ secrets.DOCKERHUB_USERNAME }}/order-service:${{ github.sha }}
+
+      # 13. Update Kubernetes Image Tags
+      - name: Update Kubernetes Manifests
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          DOCKER_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+
+          sed -i \
+            "s|image: .*user-service:.*|image: ${DOCKER_USER}/user-service:${IMAGE_TAG}|g" \
+            k8s/user-service/deployment.yaml
+
+          sed -i \
+            "s|image: .*order-service:.*|image: ${DOCKER_USER}/order-service:${IMAGE_TAG}|g" \
+            k8s/order-service/deployment.yaml
+
+      # 14. Commit updated manifests
+      - name: Commit GitOps Changes
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add k8s/user-service/deployment.yaml
+          git add k8s/order-service/deployment.yaml
+
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: update images to ${GITHUB_SHA}"
+            git push
+          fi
