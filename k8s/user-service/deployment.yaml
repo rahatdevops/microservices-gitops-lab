@@ -16,21 +16,35 @@ spec:
         app: user-service
 
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+
       initContainers:
         - name: initialize-database
-          image: YOUR_DOCKERHUB_USERNAME/user-service:initial
+          image: rahat6/user-service:initial
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+
           command:
             - python
             - -c
             - "from app import initialize_database; initialize_database()"
+
           env:
             - name: DB_HOST
               value: postgres
             - name: DB_NAME
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-secret
-                  key: POSTGRES_DB
+              value: microservices
             - name: DB_USER
               valueFrom:
                 secretKeyRef:
@@ -49,22 +63,23 @@ spec:
           ports:
             - containerPort: 5000
 
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+
           env:
             - name: DB_HOST
               value: postgres
-
             - name: DB_NAME
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-secret
-                  key: POSTGRES_DB
-
+              value: microservices
             - name: DB_USER
               valueFrom:
                 secretKeyRef:
                   name: postgres-secret
                   key: POSTGRES_USER
-
             - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -84,11 +99,3 @@ spec:
               port: 5000
             initialDelaySeconds: 15
             periodSeconds: 20
-
-          resources:
-            requests:
-              cpu: 100m
-              memory: 128Mi
-            limits:
-              cpu: 500m
-              memory: 512Mi

@@ -3,6 +3,9 @@ kind: Deployment
 metadata:
   name: order-service
   namespace: microservices
+  labels:
+    app: order-service
+
 spec:
   replicas: 2
 
@@ -16,58 +19,52 @@ spec:
         app: order-service
 
     spec:
-      initContainers:
-        - name: initialize-database
-          image: YOUR_DOCKERHUB_USERNAME/order-service:initial
-          command:
-            - python
-            - -c
-            - "from app import initialize_database; initialize_database()"
-          env:
-            - name: DB_HOST
-              value: postgres
-            - name: DB_NAME
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-secret
-                  key: POSTGRES_DB
-            - name: DB_USER
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-secret
-                  key: POSTGRES_USER
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-secret
-                  key: POSTGRES_PASSWORD
+      # Pod-level security context
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
 
       containers:
         - name: order-service
           image: rahat6/order-service:initial
 
           ports:
-            - containerPort: 5000
+            - name: http
+              containerPort: 5000
+              protocol: TCP
+
+          # Container-level security context
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
 
           env:
             - name: DB_HOST
               value: postgres
+
             - name: DB_NAME
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-secret
-                  key: POSTGRES_DB
+              value: microservices
+
             - name: DB_USER
               valueFrom:
                 secretKeyRef:
                   name: postgres-secret
                   key: POSTGRES_USER
+
             - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: postgres-secret
                   key: POSTGRES_PASSWORD
 
+          # Health checks
           readinessProbe:
             httpGet:
               path: /health
@@ -82,6 +79,7 @@ spec:
             initialDelaySeconds: 15
             periodSeconds: 20
 
+          # Resource management
           resources:
             requests:
               cpu: 100m
@@ -89,3 +87,13 @@ spec:
             limits:
               cpu: 500m
               memory: 512Mi
+
+          # Writable temporary directory
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: tmp
+          emptyDir: {}
+```
