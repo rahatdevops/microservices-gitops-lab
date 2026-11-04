@@ -1,4 +1,5 @@
-name: Microservices CI-CD
+```yaml
+name: Microservices CI/CD Pipeline
 
 on:
   push:
@@ -6,148 +7,264 @@ on:
       - main
     paths:
       - 'services/**'
+      - 'k8s/**'
       - '.github/workflows/ci-cd.yaml'
 
-  pull_request:
-    branches:
-      - main
-    paths:
-      - 'services/**'
-      - '.github/workflows/ci-cd.yaml'
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+env:
+  TRIVY_VERSION: "0.70.0"
+  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+
 jobs:
-
-  ci-cd:
-
-    runs-on: ubuntu-24.04
+  build-test-scan-deploy:
+    name: Test, Scan, Build and Push
+    runs-on: ubuntu-latest
 
     steps:
 
+      # ------------------------------------------
       # 1. Checkout source code
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      # ------------------------------------------
 
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      # ------------------------------------------
       # 2. Setup Python
+      # ------------------------------------------
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
+      # ------------------------------------------
       # 3. Test User Service
+      # ------------------------------------------
+
       - name: Test User Service
         working-directory: services/user-service
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pytest -v
+          pip install pytest
+          pytest -v tests/
 
+      # ------------------------------------------
       # 4. Test Order Service
+      # ------------------------------------------
+
       - name: Test Order Service
         working-directory: services/order-service
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pytest -v
+          pip install pytest
+          pytest -v tests/
 
-      # 5. Scan source code and Kubernetes configuration
-      - name: Trivy Filesystem Scan
-        uses: aquasecurity/trivy-action@v0.36.0
+      # ------------------------------------------
+      # 5. Install Trivy with retries
+      # ------------------------------------------
+
+      - name: Install Trivy
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="${TRIVY_VERSION}"
+          ARCHIVE="trivy_${VERSION}_Linux-64bit.tar.gz"
+
+          BASE_URL="https://github.com/aquasecurity/trivy/releases/download/v${VERSION}"
+
+          mkdir -p "$HOME/.local/bin"
+          cd "$RUNNER_TEMP"
+
+          echo "Downloading Trivy ${VERSION}"
+
+          curl -fL \
+            --retry 5 \
+            --retry-all-errors \
+            --retry-delay 5 \
+            --connect-timeout 20 \
+            --max-time 180 \
+            "${BASE_URL}/${ARCHIVE}" \
+            -o "$ARCHIVE"
+
+          echo "Downloading Trivy checksums"
+
+          curl -fL \
+            --retry 5 \
+            --retry-all-errors \
+            --retry-delay 5 \
+            --connect-timeout 20 \
+            --max-time 180 \
+            "${BASE_URL}/trivy_${VERSION}_checksums.txt" \
+            -o checksums.txt
+
+          echo "Verifying SHA256 checksum"
+
+          EXPECTED_SHA=$(awk -v file="$ARCHIVE" '$2 == file {print $1}' checksums.txt)
+
+          if [ -z "$EXPECTED_SHA" ]; then
+            echo "Trivy checksum not found"
+            exit 1
+          fi
+
+          echo "${EXPECTED_SHA}  ${ARCHIVE}" | sha256sum -c -
+
+          echo "Extracting Trivy"
+
+          tar -xzf "$ARCHIVE" -C "$RUNNER_TEMP" trivy
+
+          install -m 0755 "$RUNNER_TEMP/trivy" "$HOME/.local/bin/trivy"
+
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+          "$HOME/.local/bin/trivy" --version
+
+      # ------------------------------------------
+      # 6. Cache Trivy database
+      # ------------------------------------------
+
+      - name: Cache Trivy Database
+        uses: actions/cache@v4
         with:
-          scan-type: fs
-          scan-ref: .
-          scanners: vuln,misconfig,secret
-          format: table
-          exit-code: '1'
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
+          path: ~/.cache/trivy
+          key: trivy-db-${{ runner.os }}-${{ env.TRIVY_VERSION }}
+          restore-keys: |
+            trivy-db-${{ runner.os }}-
 
-      # 6. Build User Service Image
-      - name: Build User Image
+      # ------------------------------------------
+      # 7. Trivy Filesystem Scan
+      # ------------------------------------------
+
+      - name: Trivy Filesystem Scan
+        run: |
+          trivy fs \
+            --cache-dir "$HOME/.cache/trivy" \
+            --scanners vuln,misconfig,secret \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --exit-code 1 \
+            --skip-dirs .git \
+            .
+
+      # ------------------------------------------
+      # 8. Build User Service Image
+      # ------------------------------------------
+
+      - name: Build User Service Image
         run: |
           docker build \
-            -t ${{ secrets.DOCKERHUB_USERNAME }}/user-service:${{ github.sha }} \
+            -t "${DOCKERHUB_USERNAME}/user-service:${GITHUB_SHA}" \
             ./services/user-service
 
-      # 7. Build Order Service Image
-      - name: Build Order Image
+      # ------------------------------------------
+      # 9. Build Order Service Image
+      # ------------------------------------------
+
+      - name: Build Order Service Image
         run: |
           docker build \
-            -t ${{ secrets.DOCKERHUB_USERNAME }}/order-service:${{ github.sha }} \
+            -t "${DOCKERHUB_USERNAME}/order-service:${GITHUB_SHA}" \
             ./services/order-service
 
-      # 8. Scan User Image
-      - name: Trivy User Image Scan
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: '${{ secrets.DOCKERHUB_USERNAME }}/user-service:${{ github.sha }}'
-          format: table
-          exit-code: '1'
-          ignore-unfixed: true
-          vuln-type: os,library
-          severity: HIGH,CRITICAL
+      # ------------------------------------------
+      # 10. Trivy User Service Image Scan
+      # ------------------------------------------
 
-      # 9. Scan Order Image
-      - name: Trivy Order Image Scan
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: '${{ secrets.DOCKERHUB_USERNAME }}/order-service:${{ github.sha }}'
-          format: table
-          exit-code: '1'
-          ignore-unfixed: true
-          vuln-type: os,library
-          severity: HIGH,CRITICAL
+      - name: Trivy User Service Image Scan
+        run: |
+          trivy image \
+            --cache-dir "$HOME/.cache/trivy" \
+            --scanners vuln \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --exit-code 1 \
+            "${DOCKERHUB_USERNAME}/user-service:${GITHUB_SHA}"
 
-      # 10. Login to Docker Hub
-      - name: Docker Hub Login
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      # ------------------------------------------
+      # 11. Trivy Order Service Image Scan
+      # ------------------------------------------
+
+      - name: Trivy Order Service Image Scan
+        run: |
+          trivy image \
+            --cache-dir "$HOME/.cache/trivy" \
+            --scanners vuln \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --exit-code 1 \
+            "${DOCKERHUB_USERNAME}/order-service:${GITHUB_SHA}"
+
+      # ------------------------------------------
+      # 12. Docker Hub Login
+      # ------------------------------------------
+
+      - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # 11. Push User Image
-      - name: Push User Image
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          docker push \
-            ${{ secrets.DOCKERHUB_USERNAME }}/user-service:${{ github.sha }}
+      # ------------------------------------------
+      # 13. Push User Service Image
+      # ------------------------------------------
 
-      # 12. Push Order Image
-      - name: Push Order Image
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Push User Service Image
         run: |
-          docker push \
-            ${{ secrets.DOCKERHUB_USERNAME }}/order-service:${{ github.sha }}
+          docker push "${DOCKERHUB_USERNAME}/user-service:${GITHUB_SHA}"
 
-      # 13. Update Kubernetes Image Tags
+      # ------------------------------------------
+      # 14. Push Order Service Image
+      # ------------------------------------------
+
+      - name: Push Order Service Image
+        run: |
+          docker push "${DOCKERHUB_USERNAME}/order-service:${GITHUB_SHA}"
+
+      # ------------------------------------------
+      # 15. Update Kubernetes Image Tags
+      # ------------------------------------------
+
       - name: Update Kubernetes Manifests
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        env:
-          DOCKER_USER: ${{ secrets.DOCKERHUB_USERNAME }}
-          IMAGE_TAG: ${{ github.sha }}
         run: |
+          USER_IMAGE="${DOCKERHUB_USERNAME}/user-service:${GITHUB_SHA}"
+          ORDER_IMAGE="${DOCKERHUB_USERNAME}/order-service:${GITHUB_SHA}"
 
-          sed -i \
-            "s|image: .*user-service:.*|image: ${DOCKER_USER}/user-service:${IMAGE_TAG}|g" \
+          sed -i -E \
+            "s#(^[[:space:]]*image: ).*user-service:[^[:space:]]+#\1${USER_IMAGE}#" \
             k8s/user-service/deployment.yaml
 
-          sed -i \
-            "s|image: .*order-service:.*|image: ${DOCKER_USER}/order-service:${IMAGE_TAG}|g" \
+          sed -i -E \
+            "s#(^[[:space:]]*image: ).*order-service:[^[:space:]]+#\1${ORDER_IMAGE}#" \
             k8s/order-service/deployment.yaml
 
-      # 14. Commit updated manifests
-      - name: Commit GitOps Changes
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
+          echo "Updated Kubernetes image references:"
+          grep -n 'image:' k8s/user-service/deployment.yaml
+          grep -n 'image:' k8s/order-service/deployment.yaml
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      # ------------------------------------------
+      # 16. Commit and Push Manifest Changes
+      # ------------------------------------------
+
+      - name: Commit and Push Kubernetes Manifests
+        run: |
+          git config user.name "rahatdevops"
+          git config user.email "saeed_456@outlook.com"
 
           git add k8s/user-service/deployment.yaml
           git add k8s/order-service/deployment.yaml
 
-          if ! git diff --cached --quiet; then
-            git commit -m "chore: update images to ${GITHUB_SHA}"
-            git push
+          if git diff --cached --quiet; then
+            echo "No Kubernetes manifest changes detected"
+          else
+            git commit -m "[skip ci] chore: update microservices image tags"
+            git push origin HEAD:${GITHUB_REF_NAME}
           fi
