@@ -30,7 +30,7 @@ spec:
 
       containers:
         - name: order-service
-          image: rahat6/order-service:4bcafd8dfd7753304c15a752461fc469bbe5c752
+          image: rahat6/order-service:682c00fd9f1b7244b931d308e44cd0056a2b31d9
 
           ports:
             - name: http
