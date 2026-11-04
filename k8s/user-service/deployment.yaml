@@ -26,7 +26,7 @@ spec:
 
       initContainers:
         - name: initialize-database
-          image: rahat6/user-service:a61d58e6b5c5dcbc15331f65574978c1f78be9e1
+          image: rahat6/user-service:7440503967267c93ca64d4f202c9d3c6c34e1b24
 
           securityContext:
             allowPrivilegeEscalation: false
@@ -58,7 +58,7 @@ spec:
 
       containers:
         - name: user-service
-          image: rahat6/user-service:a61d58e6b5c5dcbc15331f65574978c1f78be9e1
+          image: rahat6/user-service:7440503967267c93ca64d4f202c9d3c6c34e1b24
 
           ports:
             - containerPort: 5000
