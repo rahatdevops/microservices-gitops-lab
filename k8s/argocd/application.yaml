@@ -6,30 +6,25 @@ metadata:
   namespace: argocd
 
 spec:
-
   project: default
 
   source:
     repoURL: https://github.com/rahatdevops/microservices-gitops-lab.git
     targetRevision: main
-    path: k8s
+    path: k8s/argocd/applications
 
     directory:
-      recurse: true
+      recurse: false
 
   destination:
     server: https://kubernetes.default.svc
-    namespace: microservices
+    namespace: argocd
 
   syncPolicy:
-
     automated:
       enabled: true
       prune: true
       selfHeal: true
-
-    syncOptions:
-      - CreateNamespace=true
 
     retry:
       limit: 5
